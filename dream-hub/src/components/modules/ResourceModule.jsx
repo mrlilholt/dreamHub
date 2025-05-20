@@ -1,10 +1,10 @@
 export default function ResourceModule({ data }) {
   return (
     <div className="space-y-2">
-      <h3 className="text-sm font-medium text-sky-300">{data.title}</h3>
-      <p className="text-xs text-gray-300">{data.description}</p>
+      <h3 className="text-sm font-medium text-sky-300">{data?.title || 'Resources'}</h3>
+      <p className="text-xs text-gray-300">{data?.description || 'Available resources'}</p>
       <div className="space-y-1 mt-2">
-        {data.resources?.map((resource, i) => (
+        {data?.resources?.map((resource, i) => (
           <a 
             key={i}
             href={resource.url} 
@@ -15,7 +15,9 @@ export default function ResourceModule({ data }) {
             <span className="w-4 h-4 mr-2 text-sky-400">📎</span>
             {resource.name}
           </a>
-        ))}
+        )) || (
+          <div className="text-xs text-gray-500">No resources available</div>
+        )}
       </div>
     </div>
   );
