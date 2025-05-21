@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { collection, addDoc, query, orderBy, onSnapshot, deleteDoc, doc, updateDoc, arrayUnion, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, query, orderBy, onSnapshot, deleteDoc, doc, updateDoc, arrayUnion, arrayRemove, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
+import { isAdmin } from '../utils/roles';
 
 export default function QuestionCard({ classId, user }) {
   const [question, setQuestion] = useState('');
@@ -9,19 +10,34 @@ export default function QuestionCard({ classId, user }) {
   const [expandedQuestion, setExpandedQuestion] = useState(null);
   const [answerText, setAnswerText] = useState('');
   const [answerLoading, setAnswerLoading] = useState(false);
+  const [votingQuestionId, setVotingQuestionId] = useState(null); // Track active voting operations
 
   useEffect(() => {
     // Subscribe to the questions collection
     const questionsRef = collection(db, 'classes', classId, 'questions');
     const q = query(questionsRef, orderBy('timestamp', 'desc'));
     
+    console.log("Setting up listener for questions in class:", classId);
+    
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const questionsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-        answers: doc.data().answers || []
-      }));
+      console.log("Firestore update received. Document count:", snapshot.docs.length);
+      
+      const questionsData = snapshot.docs.map(doc => {
+        const data = doc.data();
+        console.log(`Question ${doc.id} has ${data.sameQuestionUsers?.length || 0} votes`);
+        
+        return {
+          id: doc.id,
+          ...data,
+          answers: data.answers || [],
+          sameQuestionUsers: data.sameQuestionUsers || []
+        };
+      });
+      
       setQuestions(questionsData);
+      console.log("Updated questions state with new data");
+    }, (error) => {
+      console.error("Error in Firestore listener:", error);
     });
 
     return () => unsubscribe();
@@ -41,7 +57,8 @@ export default function QuestionCard({ classId, user }) {
         photoURL: user.photoURL,
         timestamp: serverTimestamp(),
         votes: 0,
-        answers: []
+        answers: [],
+        sameQuestionUsers: []
       });
       setQuestion('');
     } catch (error) {
@@ -52,6 +69,16 @@ export default function QuestionCard({ classId, user }) {
   };
 
   const deleteQuestion = async (questionId) => {
+    // Check if user is admin or the owner of the question
+    const question = questions.find(q => q.id === questionId);
+    if (!question) return;
+    
+    // Only allow deletion by admin or the question creator
+    if (!isAdmin(user) && user.uid !== question.userId) {
+      console.error("Permission denied: Cannot delete this question");
+      return;
+    }
+    
     try {
       const questionRef = doc(db, 'classes', classId, 'questions', questionId);
       await deleteDoc(questionRef);
@@ -60,6 +87,63 @@ export default function QuestionCard({ classId, user }) {
     }
   };
 
+  const toggleSameQuestion = async (questionId, currentUsers) => {
+    setVotingQuestionId(questionId);
+    
+    const hasVoted = currentUsers.includes(user.uid);
+    console.log(`Toggling vote: current=${hasVoted ? 'voted' : 'not voted'}`);
+    
+    // Add immediate visual feedback with local state
+    setQuestions(prevQuestions => 
+      prevQuestions.map(q => {
+        if (q.id === questionId) {
+          const updatedUsers = hasVoted 
+            ? q.sameQuestionUsers.filter(id => id !== user.uid)
+            : [...q.sameQuestionUsers, user.uid];
+            
+          console.log("Local state update:", updatedUsers.length, "votes");
+          
+          return {
+            ...q,
+            sameQuestionUsers: updatedUsers
+          };
+        }
+        return q;
+      })
+    );
+    
+    try {
+      const questionRef = doc(db, 'classes', classId, 'questions', questionId);
+      
+      if (hasVoted) {
+        console.log('Removing user from sameQuestionUsers');
+        await updateDoc(questionRef, {
+          sameQuestionUsers: arrayRemove(user.uid)
+        });
+      } else {
+        console.log('Adding user to sameQuestionUsers');
+        await updateDoc(questionRef, {
+          sameQuestionUsers: arrayUnion(user.uid)
+        });
+      }
+      console.log('Firebase update completed successfully');
+    } catch (error) {
+      console.error("Error updating question:", error);
+      alert(`Error updating vote: ${error.message || 'Unknown error'}`);
+      
+      // Revert local change on error
+      setQuestions(prevQuestions => 
+        prevQuestions.map(q => 
+          q.id === questionId 
+            ? {...q, sameQuestionUsers: currentUsers} 
+            : q
+        )
+      );
+    } finally {
+      setVotingQuestionId(null);
+    }
+  };
+  
   const submitAnswer = async (questionId) => {
     if (!answerText.trim()) return;
     
@@ -84,9 +168,9 @@ export default function QuestionCard({ classId, user }) {
     }
   };
 
-  const isTeacherOrOwner = (questionUserId) => {
-    // Check if the current user is a teacher or the owner of the question
-    return user.uid === 'YOUR_TEACHER_UID' || user.uid === questionUserId;
+  const canModifyQuestion = (questionUserId) => {
+    // Admin can modify any question, users can only modify their own
+    return isAdmin(user) || user.uid === questionUserId;
   };
 
   return (
@@ -122,8 +206,28 @@ export default function QuestionCard({ classId, user }) {
                   <div>
                     <div className="text-xs text-sky-400 font-medium">{q.displayName}</div>
                     <p className="text-sm text-white">{q.text}</p>
-                    <div className="text-xs text-gray-500 mt-1">
-                      {q.timestamp?.toDate().toLocaleString()}
+                    <div className="flex items-center gap-2 mt-1">
+                      <div className="text-xs text-gray-500">
+                        {q.timestamp?.toDate().toLocaleString()}
+                      </div>
+                      
+                      {/* Same Question Button */}
+                      <button 
+                        type="button"
+                        onClick={() => toggleSameQuestion(q.id, q.sameQuestionUsers)}
+                        disabled={votingQuestionId === q.id}
+                        className={`flex items-center text-xs px-1.5 py-0.5 rounded border 
+                          ${q.sameQuestionUsers?.includes(user.uid) 
+                            ? 'bg-purple-900/50 text-purple-300 border-purple-800/50' 
+                            : 'bg-gray-800/50 text-gray-300 border-gray-700/50 hover:bg-purple-900/30 hover:text-purple-300'}
+                          ${votingQuestionId === q.id ? 'opacity-50' : ''}`}
+                      >
+                        {votingQuestionId === q.id ? (
+                          <span className="animate-pulse">...</span>
+                        ) : (
+                          <span>+{(q.sameQuestionUsers?.length || 0)}</span>
+                        )}
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -136,7 +240,8 @@ export default function QuestionCard({ classId, user }) {
                     {q.answers.length > 0 ? `${q.answers.length} RESP` : "RESPOND"}
                   </button>
                   
-                  {isTeacherOrOwner(q.userId) && (
+                  {/* Only show delete button to admin or question owner */}
+                  {canModifyQuestion(q.userId) && (
                     <button 
                       onClick={() => deleteQuestion(q.id)}
                       className="text-xs px-1.5 py-0.5 bg-red-900/50 text-red-300 rounded border border-red-800/50"
@@ -154,14 +259,26 @@ export default function QuestionCard({ classId, user }) {
                     <div className="space-y-2 mb-2">
                       {q.answers.map((answer, index) => (
                         <div key={index} className="bg-gray-900/50 p-1.5 rounded">
-                          <div className="flex items-start gap-1.5">
-                            {answer.photoURL && (
-                              <img src={answer.photoURL} alt="" className="w-4 h-4 rounded-full mt-0.5 border border-sky-900/50" />
-                            )}
-                            <div>
-                              <div className="text-xs text-sky-400">{answer.displayName}</div>
-                              <p className="text-xs text-gray-300">{answer.text}</p>
+                          <div className="flex items-start justify-between gap-1.5">
+                            <div className="flex items-start gap-1.5">
+                              {answer.photoURL && (
+                                <img src={answer.photoURL} alt="" className="w-4 h-4 rounded-full mt-0.5 border border-sky-900/50" />
+                              )}
+                              <div>
+                                <div className="text-xs text-sky-400">{answer.displayName}</div>
+                                <p className="text-xs text-gray-300">{answer.text}</p>
+                              </div>
                             </div>
+                            
+                            {/* Only admin can delete any comment */}
+                            {isAdmin(user) && (
+                              <button 
+                                onClick={() => deleteAnswer(q.id, index)}
+                                className="text-xs text-red-400 hover:text-red-300"
+                              >
+                                ✕
+                              </button>
+                            )}
                           </div>
                         </div>
                       ))}

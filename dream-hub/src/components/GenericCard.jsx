@@ -5,8 +5,9 @@ import TutorialModule from './modules/TutorialModule';
 import ProjectModule from './modules/ProjectModule';
 import DataModule from './modules/DataModule';
 
-export default function GenericCard({ doc, isTeacher }) {
+export default function GenericCard({ doc, isAdmin }) {
   const data = doc.data();
+  console.log("GenericCard rendering:", data.type, data.title);
   
   const renderModule = () => {
     switch(data.type) {
@@ -28,7 +29,8 @@ export default function GenericCard({ doc, isTeacher }) {
     <div>
       {renderModule()}
       
-      {isTeacher && (
+      {/* Only show edit button to admin */}
+      {isAdmin && (
         <div className="mt-2 pt-2 border-t border-gray-800">
           <button className="text-xs text-gray-400 hover:text-sky-300">
             EDIT MODULE

@@ -19,7 +19,13 @@ export default function ClassDrawer({ current, setCurrent }) {
   };
 
   return (
-    <div className="space-y-1.5">
+    <div 
+      className="space-y-1.5 p-3 rounded-lg border border-sky-900/50"
+      style={{
+        backgroundColor: '#111827', // Solid background to match module form
+        boxShadow: '0 4px 20px rgba(56, 189, 248, 0.2)'
+      }}
+    >
       {classes.map(c => (
         <button
           key={c.id}
